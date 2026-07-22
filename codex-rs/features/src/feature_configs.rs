@@ -29,6 +29,17 @@ impl FeatureConfig for CodeModeConfigToml {
     }
 }
 
+/// Controls whether MultiAgentV2 task and message payloads are encrypted by Responses.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiAgentMessageDelivery {
+    /// Preserve the provider-opaque encrypted payload used by the native backend.
+    #[default]
+    Encrypted,
+    /// Deliver and persist a plaintext payload for compatible routed providers.
+    Plaintext,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MultiAgentV2ConfigToml {
@@ -68,6 +79,9 @@ pub struct MultiAgentV2ConfigToml {
     pub expose_spawn_agent_model_overrides: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub non_code_mode_only: Option<bool>,
+    /// Selects encrypted or plaintext delivery for MultiAgentV2 tasks and messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_delivery: Option<MultiAgentMessageDelivery>,
 }
 
 impl FeatureConfig for MultiAgentV2ConfigToml {

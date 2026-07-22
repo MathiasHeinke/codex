@@ -10603,6 +10603,7 @@ tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 expose_spawn_agent_model_overrides = false
 non_code_mode_only = true
+message_delivery = "plaintext"
 
 [agents]
 max_concurrent_threads_per_session = 9
@@ -10650,6 +10651,10 @@ max_concurrent_threads_per_session = 9
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(!config.multi_agent_v2.expose_spawn_agent_model_overrides);
     assert!(config.multi_agent_v2.non_code_mode_only);
+    assert_eq!(
+        config.multi_agent_v2.message_delivery,
+        MultiAgentMessageDelivery::Plaintext
+    );
 
     Ok(())
 }
@@ -10740,6 +10745,10 @@ fn multi_agent_v2_exposes_model_overrides_by_default() {
 
     let config = resolve_multi_agent_v2_config(&config_toml);
     assert!(config.expose_spawn_agent_model_overrides);
+    assert_eq!(
+        config.message_delivery,
+        MultiAgentMessageDelivery::Encrypted
+    );
     assert!(
         [
             config.root_agent_usage_hint_text,

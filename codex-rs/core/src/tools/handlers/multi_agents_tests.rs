@@ -391,19 +391,33 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend() {
-    let (session, mut turn) = make_session_and_context().await;
+async fn multi_agent_v2_spawn_allows_child_model_without_v2_catalog_tag() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        task_name: String,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config
         .features
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     set_turn_config(&mut turn, config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
 
-    let err = SpawnAgentHandlerV2::default()
+    let output = SpawnAgentHandlerV2::default()
         .handle(invocation(
-            Arc::new(session),
-            Arc::new(turn),
+            session.clone(),
+            turn.clone(),
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
@@ -413,16 +427,28 @@ async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend() {
             })),
         ))
         .await
-        .err()
-        .expect("model from a different multi-agent backend should be rejected");
-
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
-            "Unknown model `gpt-5.4` for spawn_agent. Available models: gpt-5.6-sol, gpt-5.6-terra"
-                .to_string()
+        .expect("model without a v2 multi-agent catalog tag should be accepted");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(
+            session.thread_id,
+            &turn.session_source,
+            result.task_name.as_str(),
         )
-    );
+        .await
+        .expect("spawned task name should resolve");
+    let snapshot = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5.4");
 }
 
 #[tokio::test]
@@ -1162,7 +1188,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             )
     }));
 
-    SendMessageHandlerV2
+    SendMessageHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1188,6 +1214,88 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && !communication.trigger_turn
             )
     }));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_plaintext_delivery_applies_to_spawn_send_and_followup() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.message_delivery = crate::config::MultiAgentMessageDelivery::Plaintext;
+    set_turn_config(&mut turn, config);
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "plaintext-spawn",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+
+    SendMessageHandlerV2::new(crate::config::MultiAgentMessageDelivery::Plaintext)
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "send_message",
+            function_payload(json!({
+                "target": "worker",
+                "message": "plaintext-send"
+            })),
+        ))
+        .await
+        .expect("send_message should succeed");
+    FollowupTaskHandlerV2::new(crate::config::MultiAgentMessageDelivery::Plaintext)
+        .handle(invocation(
+            session,
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": "worker",
+                "message": "plaintext-followup"
+            })),
+        ))
+        .await
+        .expect("followup_task should succeed");
+
+    for (content, trigger_turn) in [
+        ("plaintext-spawn", true),
+        ("plaintext-send", false),
+        ("plaintext-followup", true),
+    ] {
+        assert!(manager.captured_ops().iter().any(|(id, op)| {
+            *id == child_thread_id
+                && matches!(
+                    op,
+                    Op::InterAgentCommunication { communication }
+                        if communication.content == content
+                            && communication.encrypted_content.is_none()
+                            && communication.trigger_turn == trigger_turn
+                )
+        }));
+    }
 }
 
 #[tokio::test]
@@ -1358,7 +1466,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
         agent_role: None,
     });
 
-    SendMessageHandlerV2
+    SendMessageHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1434,7 +1542,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         agent_role: None,
     });
 
-    let Err(err) = FollowupTaskHandlerV2
+    let Err(err) = FollowupTaskHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1816,7 +1924,7 @@ async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
         })),
     );
 
-    let Err(err) = SendMessageHandlerV2.handle(invocation).await else {
+    let Err(err) = SendMessageHandlerV2::default().handle(invocation).await else {
         panic!("legacy items field should be rejected in v2");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -1871,7 +1979,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
         })),
     );
 
-    let Err(err) = SendMessageHandlerV2.handle(invocation).await else {
+    let Err(err) = SendMessageHandlerV2::default().handle(invocation).await else {
         panic!("send_message interrupt parameter should be rejected");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -1959,7 +2067,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         )
         .await;
 
-    FollowupTaskHandlerV2
+    FollowupTaskHandlerV2::default()
         .handle(invocation(
             session,
             turn,
@@ -2099,7 +2207,7 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
         })),
     );
 
-    let Err(err) = FollowupTaskHandlerV2.handle(invocation).await else {
+    let Err(err) = FollowupTaskHandlerV2::default().handle(invocation).await else {
         panic!("legacy items field should be rejected in v2");
     };
     let FunctionCallError::RespondToModel(message) = err else {

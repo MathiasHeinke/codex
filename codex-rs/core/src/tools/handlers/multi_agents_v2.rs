@@ -52,15 +52,27 @@ pub(crate) async fn emit_sub_agent_activity(
 }
 
 pub(super) fn communication_from_tool_message(
+    message_delivery: crate::config::MultiAgentMessageDelivery,
     author: AgentPath,
     recipient: AgentPath,
     message: String,
 ) -> InterAgentCommunication {
-    InterAgentCommunication::new_encrypted(
-        author,
-        recipient,
-        Vec::new(),
-        message,
-        /*trigger_turn*/ true,
-    )
+    match message_delivery {
+        crate::config::MultiAgentMessageDelivery::Encrypted => {
+            InterAgentCommunication::new_encrypted(
+                author,
+                recipient,
+                Vec::new(),
+                message,
+                /*trigger_turn*/ true,
+            )
+        }
+        crate::config::MultiAgentMessageDelivery::Plaintext => InterAgentCommunication::new(
+            author,
+            recipient,
+            Vec::new(),
+            message,
+            /*trigger_turn*/ true,
+        ),
+    }
 }

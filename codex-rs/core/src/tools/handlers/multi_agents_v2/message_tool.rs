@@ -6,6 +6,7 @@
 use super::*;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
+use crate::config::MultiAgentMessageDelivery;
 use crate::tools::context::FunctionToolOutput;
 use codex_protocol::protocol::InterAgentCommunication;
 
@@ -62,6 +63,7 @@ pub(crate) async fn handle_message_string_tool(
     mode: MessageDeliveryMode,
     target: String,
     message: String,
+    message_delivery: MultiAgentMessageDelivery,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let message = message_content(message)?;
     let ToolInvocation {
@@ -100,8 +102,12 @@ pub(crate) async fn handle_message_string_tool(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let communication =
-        communication_from_tool_message(author, receiver_agent_path.clone(), message);
+    let communication = communication_from_tool_message(
+        message_delivery,
+        author,
+        receiver_agent_path.clone(),
+        message,
+    );
     let kind = match mode {
         MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,

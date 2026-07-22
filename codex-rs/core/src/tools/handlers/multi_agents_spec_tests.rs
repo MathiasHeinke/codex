@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::MultiAgentMessageDelivery;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -38,7 +39,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
 }
 
 #[test]
-fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
+fn spawn_agent_tool_v2_requires_task_name_and_lists_models_across_catalog_tags() {
     let mut incompatible = model_preset("incompatible", /*show_in_picker*/ true);
     incompatible.multi_agent_version = Some(MultiAgentVersion::V1);
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
@@ -53,6 +54,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         expose_spawn_agent_model_overrides: true,
         multi_agent_version: MultiAgentVersion::V2,
         usage_hint_text: None,
+        message_delivery: MultiAgentMessageDelivery::Encrypted,
     });
 
     let ToolSpec::Function(ResponsesApiTool {
@@ -84,7 +86,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         "- `visible-model`: visible description Reasoning efforts: medium (default). Service tiers: priority."
     ));
     assert!(!description.contains("hidden-model"));
-    assert!(!description.contains("incompatible-model"));
+    assert!(description.contains("incompatible-model"));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
     assert_eq!(
@@ -134,6 +136,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         expose_spawn_agent_model_overrides: true,
         multi_agent_version: MultiAgentVersion::V1,
         usage_hint_text: None,
+        message_delivery: MultiAgentMessageDelivery::Encrypted,
     });
 
     let ToolSpec::Namespace(namespace) = tool else {
@@ -199,6 +202,7 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
         expose_spawn_agent_model_overrides: true,
         multi_agent_version: MultiAgentVersion::V2,
         usage_hint_text: None,
+        message_delivery: MultiAgentMessageDelivery::Encrypted,
     });
 
     let ToolSpec::Function(ResponsesApiTool { description, .. }) = tool else {
@@ -245,6 +249,7 @@ fn spawn_agent_tool_keeps_model_controls_when_spawn_metadata_is_hidden() {
         expose_spawn_agent_model_overrides: true,
         multi_agent_version: MultiAgentVersion::V2,
         usage_hint_text: None,
+        message_delivery: MultiAgentMessageDelivery::Encrypted,
     });
 
     let ToolSpec::Function(ResponsesApiTool {
@@ -278,6 +283,7 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
         expose_spawn_agent_model_overrides: false,
         multi_agent_version: MultiAgentVersion::V2,
         usage_hint_text: None,
+        message_delivery: MultiAgentMessageDelivery::Encrypted,
     });
 
     let ToolSpec::Function(ResponsesApiTool {
@@ -306,7 +312,7 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
         parameters,
         output_schema,
         ..
-    }) = create_send_message_tool()
+    }) = create_send_message_tool(MultiAgentMessageDelivery::Encrypted)
     else {
         panic!("send_message should be a function tool");
     };
@@ -349,7 +355,7 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         parameters,
         output_schema,
         ..
-    }) = create_followup_task_tool()
+    }) = create_followup_task_tool(MultiAgentMessageDelivery::Encrypted)
     else {
         panic!("followup_task should be a function tool");
     };
@@ -380,6 +386,30 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         Some(&vec!["target".to_string(), "message".to_string()])
     );
     assert_eq!(output_schema, None);
+}
+
+#[test]
+fn plaintext_delivery_removes_encrypted_marker_from_v2_message_fields() {
+    let spawn = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        message_delivery: MultiAgentMessageDelivery::Plaintext,
+        ..SpawnAgentToolOptions::default()
+    });
+    let send = create_send_message_tool(MultiAgentMessageDelivery::Plaintext);
+    let followup = create_followup_task_tool(MultiAgentMessageDelivery::Plaintext);
+
+    for tool in [spawn, send, followup] {
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+            panic!("v2 collaboration tool should be a function tool");
+        };
+        assert_eq!(
+            parameters
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.get("message"))
+                .and_then(|schema| schema.encrypted),
+            None
+        );
+    }
 }
 
 #[test]
